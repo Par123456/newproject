@@ -13,48 +13,67 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from itertools import cycle
+import stem.process
+from stem.util import term
+import stem.control
+import subprocess
 
 init(autoreset=True)
 
-PROXIES = [
-    "80.249.112.162:80",
-    "185.105.182.179:80",
-    "185.159.153.243:80"
-]
+# تنظیمات Tor
+TOR_PORT = 9050
+TOR_CONTROL_PORT = 9051
+TOR_PASSWORD = "your_password"  # پسورد دلخواه برای کنترل Tor
 
-class ProxyManager:
-    def __init__(self, proxy_list):
-        self.proxies = cycle(proxy_list)
-        self.current_proxy = next(self.proxies)
-        self.failed_attempts = 0
-        self.max_fails = 3
-        self.attack_count = 0
+# مسیر اجرایی Tor (اگر Tor به صورت جداگانه نصب شده است)
+TOR_PATH = "/path/to/tor"  # مسیر اجرایی Tor را اینجا وارد کنید
 
-    def get_proxy(self):
-        return {
-            'http': f'http://{self.current_proxy}',
-            'https': f'http://{self.current_proxy}'
+# تنظیمات Snowflake
+SNOWFLAKE_CONFIG = {
+    'UseBridges': '1',
+    'ClientTransportPlugin': 'obfs4 exec /usr/bin/obfs4proxy',
+    'Bridge': 'snowflake 192.0.2.3:1',
+}
+
+class TorManager:
+    def __init__(self):
+        self.tor_process = None
+        self.session = None
+
+    def start_tor(self):
+        """شروع Tor با پیکربندی Snowflake"""
+        try:
+            print(f"{Fore.YELLOW}Starting Tor with Snowflake...{Style.RESET_ALL}")
+            self.tor_process = stem.process.launch_tor_with_config(
+                config={
+                    'SocksPort': str(TOR_PORT),
+                    'ControlPort': str(TOR_CONTROL_PORT),
+                    'HashedControlPassword': stem.control.password_hash(TOR_PASSWORD),
+                    **SNOWFLAKE_CONFIG
+                },
+                tor_cmd=TOR_PATH,
+                init_msg_handler=lambda line: print(f"{Fore.CYAN}{term.format(line, term.Color.BLUE)}{Style.RESET_ALL}") if "Bootstrapped" in line else None,
+            )
+            print(f"{Fore.GREEN}Tor started successfully!{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}Failed to start Tor: {e}{Style.RESET_ALL}")
+            sys.exit(1)
+
+    def stop_tor(self):
+        """متوقف کردن Tor"""
+        if self.tor_process:
+            print(f"{Fore.YELLOW}Stopping Tor...{Style.RESET_ALL}")
+            self.tor_process.terminate()
+            print(f"{Fore.GREEN}Tor stopped successfully!{Style.RESET_ALL}")
+
+    def create_session(self):
+        """ایجاد یک Session با استفاده از Tor"""
+        self.session = Session()
+        self.session.proxies = {
+            'http': f'socks5h://127.0.0.1:{TOR_PORT}',
+            'https': f'socks5h://127.0.0.1:{TOR_PORT}',
         }
-
-    def rotate_proxy(self, force=False):
-        if force or self.failed_attempts >= self.max_fails:
-            print(f"{Fore.YELLOW}Rotating proxy...{Style.RESET_ALL}")
-            self.current_proxy = next(self.proxies)
-            self.failed_attempts = 0
-            sleep(5)
-            print(f"{Fore.GREEN}Proxy rotated successfully{Style.RESET_ALL}")
-        return self.get_proxy()
-
-    def increment_attack_count(self):
-        self.attack_count += 1
-        if self.attack_count >= 50:
-            self.attack_count = 0
-            return self.rotate_proxy(force=True)
-        return self.get_proxy()
-
-    def handle_failure(self):
-        self.failed_attempts += 1
-        return self.rotate_proxy()
+        return self.session
 
 class BotConfig:
     def __init__(self):
@@ -113,13 +132,10 @@ def change_url_base():
     url_base = 'https://iran.fruitcraft.ir/' if url_base == 'http://iran.fruitcraft.ir/' else 'http://iran.fruitcraft.ir/'
 
 def make_request(session, method, url, data=None, timeout=10):
-    proxy_manager = ProxyManager(PROXIES)
     retries = 0
 
     while retries < config.max_retries:
         try:
-            session.proxies = proxy_manager.get_proxy()
-
             if method.lower() == 'get':
                 response = session.get(url, timeout=timeout)
             else:
@@ -128,8 +144,7 @@ def make_request(session, method, url, data=None, timeout=10):
             response.raise_for_status()
 
             if response.status_code == 429:
-                print(f"{Fore.YELLOW}Rate limit hit. Rotating proxy and waiting...{Style.RESET_ALL}")
-                proxy_manager.rotate_proxy()
+                print(f"{Fore.YELLOW}Rate limit hit. Waiting...{Style.RESET_ALL}")
                 sleep(config.retry_delay)
                 retries += 1
                 continue
@@ -138,19 +153,13 @@ def make_request(session, method, url, data=None, timeout=10):
 
         except HTTPError as e:
             if e.response.status_code == 429:
-                print(f"{Fore.YELLOW}Rate limit hit. Rotating proxy and waiting...{Style.RESET_ALL}")
-                proxy_manager.rotate_proxy()
+                print(f"{Fore.YELLOW}Rate limit hit. Waiting...{Style.RESET_ALL}")
                 sleep(config.retry_delay)
             else:
                 print(f"{Fore.RED}HTTP Error: {e}. Retrying...{Style.RESET_ALL}")
 
-        except ProxyError:
-            print(f"{Fore.RED}Proxy error. Rotating proxy...{Style.RESET_ALL}")
-            proxy_manager.rotate_proxy()
-
         except (ReadTimeout, ConnectionError):
             print(f"{Fore.RED}Connection issue. Retrying...{Style.RESET_ALL}")
-            proxy_manager.handle_failure()
 
         except Exception as e:
             print(f"{Fore.RED}Unexpected error: {e}. Retrying...{Style.RESET_ALL}")
@@ -277,7 +286,7 @@ def battle(opponent_id, q, cards, attacks_in_today, hero_id=None):
     if config.fruit_pass:
         data['fruit_pass'] = '1'
     
-    print(f"{Fore.YELLOW}Sending request with data: {data}{Style.RESET_ALL}")  # چاپ داده‌های ارسالی
+    print(f"{Fore.YELLOW}Sending request with data: {data}{Style.RESET_ALL}")
     response = make_request(session, 'get', f'{url_base}battle/battle?' + decode(data))
     if response:
         try:
@@ -309,7 +318,6 @@ def attack_offline():
     xp = 0
     doon = 0
     attacked = {}
-    proxy_manager = ProxyManager(PROXIES)
     while True:
         try:
             enemies = get_enemies_from_db(db_file, max_power, min_level)
@@ -336,7 +344,6 @@ def attack_offline():
                 print(f"{Fore.MAGENTA}Attacking player ID: {Fore.BLUE}{enemy['id']}{Fore.MAGENTA}...Level: {Fore.GREEN}{enemy['level']}{Style.RESET_ALL}")
 
                 for i in range(max_attempts_per_player):
-                    session.proxies = proxy_manager.increment_attack_count()
                     battle_result = battle(enemy['id'], q, [cards[0]], attacked[enemy['id']])
 
                     if battle_result is None:
@@ -394,7 +401,7 @@ def manage_multiple_accounts():
 
 def load_account(restore_key):
     global session, url_base, load, max_power, min_level, min_level_for_storage, max_attempts_per_player, cards, db_file, conn, cursor, config, multi_db
-    session = Session()
+    session = tor_manager.create_session()
     selected_user_agent = choice(user_agents)
     session.headers.update({
         'User-Agent': selected_user_agent,
@@ -452,6 +459,8 @@ def load_account(restore_key):
 
 if __name__ == "__main__":
     try:
+        tor_manager = TorManager()
+        tor_manager.start_tor()
         display_welcome_message()
         manage_multiple_accounts()
         restore_key = input(f"{Fore.LIGHTCYAN_EX}Enter your restore key: {Style.RESET_ALL}")
@@ -463,3 +472,4 @@ if __name__ == "__main__":
     finally:
         if 'conn' in globals():
             conn.close()
+        tor_manager.stop_tor()
