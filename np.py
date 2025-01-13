@@ -23,10 +23,6 @@ init(autoreset=True)
 # تنظیمات Tor
 TOR_PORT = 9050
 TOR_CONTROL_PORT = 9051
-TOR_PASSWORD = "your_password"  # پسورد دلخواه برای کنترل Tor
-
-# مسیر اجرایی Tor (اگر Tor به صورت جداگانه نصب شده است)
-TOR_PATH = "/path/to/tor"  # مسیر اجرایی Tor را اینجا وارد کنید
 
 # تنظیمات Snowflake
 SNOWFLAKE_CONFIG = {
@@ -48,10 +44,8 @@ class TorManager:
                 config={
                     'SocksPort': str(TOR_PORT),
                     'ControlPort': str(TOR_CONTROL_PORT),
-                    'HashedControlPassword': stem.control.password_hash(TOR_PASSWORD),
                     **SNOWFLAKE_CONFIG
                 },
-                tor_cmd=TOR_PATH,
                 init_msg_handler=lambda line: print(f"{Fore.CYAN}{term.format(line, term.Color.BLUE)}{Style.RESET_ALL}") if "Bootstrapped" in line else None,
             )
             print(f"{Fore.GREEN}Tor started successfully!{Style.RESET_ALL}")
@@ -292,9 +286,10 @@ def battle(opponent_id, q, cards, attacks_in_today, hero_id=None):
         try:
             battle_result = loads(response.text)
             print(f"{Fore.CYAN}Server Response: {battle_result}{Style.RESET_ALL}")
-            if 'data' in battle_result and 'weekly_score' in battle_result['data']:
-                doon = battle_result['data']['weekly_score']
-                print(f"{Fore.GREEN}Updated Doon: {doon}{Style.RESET_ALL}")
+            if 'data' in battle_result:
+                doon = battle_result['data'].get('weekly_score', 0)
+                xp = battle_result['data'].get('xp_added', 0)
+                print(f"{Fore.GREEN}Updated Doon: {doon}, XP: {xp}{Style.RESET_ALL}")
                 return battle_result
             else:
                 print(f"{Fore.RED}Invalid battle result format: {battle_result}{Style.RESET_ALL}")
@@ -356,7 +351,7 @@ def attack_offline():
                         lost += 1
                         break
                     doon = battle_result['data'].get('weekly_score', 0)
-                    print(f"{Fore.GREEN}Updated Doon: {doon}{Style.RESET_ALL}")
+                    print(f"{Fore.GREEN}Updated Doon: {doon}, XP: {xp}{Style.RESET_ALL}")
                     if doon >= config.max_doon:
                         print(f"{Fore.YELLOW}Maximum doon reached ({config.max_doon}). Stopping attacks.{Style.RESET_ALL}")
                         return True
