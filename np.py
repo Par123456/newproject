@@ -276,6 +276,8 @@ def battle(opponent_id, q, cards, attacks_in_today, hero_id=None):
         data['hero_id'] = hero_id
     if config.fruit_pass:
         data['fruit_pass'] = '1'
+    
+    print(f"{Fore.YELLOW}Sending request with data: {data}{Style.RESET_ALL}")  # چاپ داده‌های ارسالی
     response = make_request(session, 'get', f'{url_base}battle/battle?' + decode(data))
     if response:
         try:
